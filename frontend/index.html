@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resume Matcher & Ranker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top Application Header -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+        </div>
+        <div>
+          <h1>Resume Matcher &amp; Ranker</h1>
+          <p class="brand-tagline">Skill parsing, experience evaluation &amp; semantic ATS ranking</p>
+        </div>
+      </div>
+
+      <!-- Server Connection Settings -->
+      <div class="server-config">
+        <div class="api-status" id="api-status-badge">
+          <span class="status-dot"></span>
+          <span class="status-label">Checking API...</span>
+        </div>
+        <div class="api-url-wrapper">
+          <input type="text" id="api-base-url" value="http://127.0.0.1:8000" title="API Base URL" spellcheck="false">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-test-connection">Test</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs-wrapper">
+      <div class="nav-tabs">
+        <button class="nav-tab active" data-tab="tab-matcher">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <circle cx="12" cy="12" r="6"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+          </svg>
+          Match &amp; Rank
+        </button>
+        <button class="nav-tab" data-tab="tab-upload">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          Upload Resumes
+        </button>
+        <button class="nav-tab" data-tab="tab-jd">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+          </svg>
+          Job Descriptions
+        </button>
+        <button class="nav-tab" data-tab="tab-skills">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+            <line x1="7" y1="7" x2="7.01" y2="7"></line>
+          </svg>
+          Skills Database
+        </button>
+      </div>
+    </nav>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="main-container">
+
+    <!-- Global Notification Banner -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 1: MATCH & RANK CANDIDATES                           -->
+    <!-- ======================================================== -->
+    <section id="tab-matcher" class="tab-panel active">
+      <div class="section-heading">
+        <div>
+          <h2>Match &amp; Rank Resumes</h2>
+          <p class="section-desc">Score candidate resumes against a selected Job Description with rule-based and semantic fitting.</p>
+        </div>
+      </div>
+
+      <div class="grid-2col">
+        <!-- Configuration Card -->
+        <div class="card">
+          <div class="card-header">
+            <h3>1. Target Job Description &amp; Threshold</h3>
+          </div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="match-jd-sno">Job Description ID (SNo)</label>
+                <div class="input-with-button">
+                  <input type="number" id="match-jd-sno" min="1" value="2" placeholder="e.g. 1 or 2">
+                  <button type="button" class="btn btn-secondary" id="btn-fetch-match-jd">Load JD</button>
+                </div>
+                <small class="helper-text">Enter the serial number of the JD to match against.</small>
+              </div>
+
+              <div class="form-group flex-1">
+                <label for="match-threshold">
+                  Score Threshold: <strong id="threshold-val">0%</strong>
+                </label>
+                <input type="range" id="match-threshold" min="0" max="100" value="0" class="range-slider">
+                <small class="helper-text">Candidates below this score will be excluded.</small>
+              </div>
+            </div>
+
+            <!-- JD Summary Preview Box -->
+            <div id="jd-preview-box" class="jd-preview-box">
+              <div class="preview-empty">No Job Description loaded yet. Click <strong>Load JD</strong> to preview requirements.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Resume File Locations Card -->
+        <div class="card">
+          <div class="card-header flex-between">
+            <h3>2. Resumes to Evaluate</h3>
+            <div class="button-group-sm">
+              <button type="button" class="btn btn-link btn-xs" id="btn-add-dummy-paths">+ Add Sample Resumes</button>
+              <button type="button" class="btn btn-link btn-xs" id="btn-add-uploaded-paths">+ Add Uploaded</button>
+              <button type="button" class="btn btn-link btn-xs text-danger" id="btn-clear-paths">Clear</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="form-group">
+              <label for="match-locations">Resume File Paths (one per line &mdash; e.g. <code>uploaded/in_queue/resume.pdf</code>)</label>
+              <textarea id="match-locations" rows="7" wrap="off" placeholder="Paste or type resume file paths here, one per line:&#10;uploaded/in_queue/sample_resume.pdf&#10;uploaded/in_queue/another_resume.docx" spellcheck="false"></textarea>
+              <small class="helper-text">Enter relative paths (e.g. <code>uploaded/in_queue/...</code>) or full file paths accessible on the server machine.</small>
+            </div>
+
+            <div class="action-footer">
+              <button type="button" class="btn btn-primary btn-lg w-100" id="btn-run-match">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                Run Match &amp; Rank
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Match Results Section -->
+      <section class="results-container" id="results-section" style="display: none;">
+        <div class="results-header">
+          <div>
+            <h3>Ranked Candidate Results</h3>
+            <p id="results-summary-text" class="text-muted">Analysis complete.</p>
+          </div>
+          <div class="results-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-collapse-all">Collapse Details</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-expand-all">Expand Details</button>
+          </div>
+        </div>
+
+        <!-- Matched List -->
+        <div id="matched-candidates-list" class="candidates-list"></div>
+
+        <!-- Failed Files (if any) -->
+        <div id="failed-candidates-container" class="failed-container" style="display: none;">
+          <div class="failed-header">
+            <h4>Failed to Process (<span id="failed-count">0</span>)</h4>
+            <p class="text-muted">The following files encountered parsing errors or invalid formats:</p>
+          </div>
+          <div id="failed-list" class="failed-list"></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- TAB 2: UPLOAD RESUMES                                    -->
+    <!-- ======================================================== -->
+    <section id="tab-upload" class="tab-panel">
+      <div class="section-heading">
+        <div>
+          <h2>Upload Resumes</h2>
+          <p class="section-desc">Upload candidate resumes in PDF or DOCX format directly to the server's processing queue.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <!-- Drag & Drop Zone -->
+          <div class="dropzone" id="dropzone">
+            <input type="file" id="resume-file-input" multiple accept=".pdf,.docx" class="file-input-hidden">
+            <div class="dropzone-content">
+              <div class="dropzone-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+              </div>
+              <h4>Drag &amp; drop resumes here</h4>
+              <p class="text-muted">Supports <strong>.pdf</strong> and <strong>.docx</strong> files</p>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-browse-files">Browse Files</button>
+            </div>
+          </div>
+
+          <!-- Selected Files List -->
+          <div id="selected-files-container" class="file-queue-container" style="display: none;">
+            <div class="file-queue-header">
+              <h4>Files Ready for Upload (<span id="file-queue-count">0</span>)</h4>
+              <button type="button" class="btn btn-link btn-xs text-danger" id="btn-clear-queue">Clear all</button>
+            </div>
+            <ul id="selected-files-list" class="file-queue-list"></ul>
+
+            <div class="action-footer mt-4">
+              <button type="button" class="btn btn-primary" id="btn-upload-files">
+                Upload to Server
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Upload History in Session -->
+      <div class="card mt-4" id="upload-history-card">
+        <div class="card-header flex-between">
+          <h3>Uploaded in this Session</h3>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-transfer-to-matcher">
+            Send All to Matcher &rarr;
+          </button>
+        </div>
+        <div class="card-body">
+          <div id="upload-history-empty" class="text-muted">No files uploaded during this session yet.</div>
+          <ul id="upload-history-list" class="file-history-list" style="display: none;"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- TAB 3: JOB DESCRIPTIONS MANAGER                          -->
+    <!-- ======================================================== -->
+    <section id="tab-jd" class="tab-panel">
+      <div class="section-heading">
+        <div>
+          <h2>Job Descriptions Manager</h2>
+          <p class="section-desc">Create, view, and update job descriptions, skill requirements, and ATS ranking weights.</p>
+        </div>
+      </div>
+
+      <!-- Sub Tabs: Create vs View/Edit -->
+      <div class="sub-tabs">
+        <button class="sub-tab active" data-subtab="subtab-create-jd">Create New JD</button>
+        <button class="sub-tab" data-subtab="subtab-edit-jd">View &amp; Edit Existing JD</button>
+      </div>
+
+      <!-- Subtab: Create JD -->
+      <div id="subtab-create-jd" class="subtab-panel active">
+        <div class="card">
+          <div class="card-header flex-between">
+            <h3>New Job Description</h3>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-prefill-jd">Prefill Example Data</button>
+          </div>
+          <div class="card-body">
+            <form id="create-jd-form">
+              <div class="form-group">
+                <label for="create-jd-title">Job Title <span class="required">*</span></label>
+                <input type="text" id="create-jd-title" placeholder="e.g. Senior Backend Engineer (Python)" required>
+              </div>
+
+              <div class="form-group">
+                <label for="create-jd-raw">Raw Job Description Text</label>
+                <textarea id="create-jd-raw" rows="4" placeholder="Paste the original full job description text here..."></textarea>
+              </div>
+
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label for="create-jd-must-have">Must-Have Skills (comma-separated) <span class="required">*</span></label>
+                  <input type="text" id="create-jd-must-have" placeholder="python, fastapi, postgresql" required>
+                  <small class="helper-text">Essential skills candidates must possess.</small>
+                </div>
+
+                <div class="form-group">
+                  <label for="create-jd-nice-to-have">Nice-to-Have Skills (comma-separated)</label>
+                  <input type="text" id="create-jd-nice-to-have" placeholder="docker, redis, aws">
+                  <small class="helper-text">Bonus skills. Cannot overlap with must-have skills.</small>
+                </div>
+              </div>
+
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label for="create-jd-exp">Minimum Experience (Years) <span class="required">*</span></label>
+                  <input type="number" id="create-jd-exp" min="0" step="0.5" value="2" required>
+                </div>
+
+                <div class="form-group">
+                  <label for="create-jd-reqs">Key Requirements / Responsibilities (one per line)</label>
+                  <textarea id="create-jd-reqs" rows="3" placeholder="Designed and deployed RESTful microservices&#10;Experience with relational databases and query optimization"></textarea>
+                  <small class="helper-text">Used for semantic embedding matching.</small>
+                </div>
+              </div>
+
+              <!-- Weights Section -->
+              <div class="weights-box">
+                <h4>Scoring Weights</h4>
+                <p class="text-muted small mb-3">Adjust how much each criterion contributes to the final ranking score.</p>
+                <div class="grid-4col">
+                  <div class="form-group">
+                    <label for="create-w-must">Must-Have Weight</label>
+                    <input type="number" id="create-w-must" step="0.1" min="0" value="0.5" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="create-w-nice">Nice-to-Have Weight</label>
+                    <input type="number" id="create-w-nice" step="0.1" min="0" value="0.3" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="create-w-exp">Experience Weight</label>
+                    <input type="number" id="create-w-exp" step="0.1" min="0" value="0.2" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="create-w-reqs">Requirements Weight</label>
+                    <input type="number" id="create-w-reqs" step="0.1" min="0" value="0.2" required>
+                  </div>
+                </div>
+              </div>
+
+              <div class="action-footer mt-4">
+                <button type="submit" class="btn btn-primary" id="btn-submit-create-jd">
+                  Create Job Description
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Subtab: View & Edit JD -->
+      <div id="subtab-edit-jd" class="subtab-panel">
+        <div class="card">
+          <div class="card-header">
+            <h3>Find &amp; Edit Job Description</h3>
+          </div>
+          <div class="card-body">
+            <div class="form-row mb-4">
+              <div class="form-group flex-1">
+                <label for="edit-jd-search-sno">Job Description Serial Number (SNo)</label>
+                <div class="input-with-button">
+                  <input type="number" id="edit-jd-search-sno" min="1" value="1" placeholder="e.g. 1">
+                  <button type="button" class="btn btn-primary" id="btn-fetch-edit-jd">Fetch JD</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Edit Form (populated dynamically) -->
+            <form id="edit-jd-form" style="display: none;">
+              <input type="hidden" id="edit-jd-sno-hidden">
+
+              <div class="form-group">
+                <label for="edit-jd-title">Job Title <span class="required">*</span></label>
+                <input type="text" id="edit-jd-title" required>
+              </div>
+
+              <div class="form-group">
+                <label for="edit-jd-raw">Raw Job Description Text</label>
+                <textarea id="edit-jd-raw" rows="4"></textarea>
+              </div>
+
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label for="edit-jd-must-have">Must-Have Skills (comma-separated) <span class="required">*</span></label>
+                  <input type="text" id="edit-jd-must-have" required>
+                </div>
+
+                <div class="form-group">
+                  <label for="edit-jd-nice-to-have">Nice-to-Have Skills (comma-separated)</label>
+                  <input type="text" id="edit-jd-nice-to-have">
+                </div>
+              </div>
+
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label for="edit-jd-exp">Minimum Experience (Years) <span class="required">*</span></label>
+                  <input type="number" id="edit-jd-exp" min="0" step="0.5" required>
+                </div>
+
+                <div class="form-group">
+                  <label for="edit-jd-reqs">Requirements (one per line)</label>
+                  <textarea id="edit-jd-reqs" rows="3"></textarea>
+                </div>
+              </div>
+
+              <div class="weights-box">
+                <h4>Scoring Weights</h4>
+                <div class="grid-4col">
+                  <div class="form-group">
+                    <label for="edit-w-must">Must-Have Weight</label>
+                    <input type="number" id="edit-w-must" step="0.1" min="0" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="edit-w-nice">Nice-to-Have Weight</label>
+                    <input type="number" id="edit-w-nice" step="0.1" min="0" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="edit-w-exp">Experience Weight</label>
+                    <input type="number" id="edit-w-exp" step="0.1" min="0" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="edit-w-reqs">Requirements Weight</label>
+                    <input type="number" id="edit-w-reqs" step="0.1" min="0" required>
+                  </div>
+                </div>
+              </div>
+
+              <div class="action-footer mt-4">
+                <button type="submit" class="btn btn-primary" id="btn-submit-edit-jd">
+                  Save Changes to JD
+                </button>
+              </div>
+            </form>
+
+            <div id="edit-jd-empty-hint" class="preview-empty">
+              Enter a Job Description SNo above and click <strong>Fetch JD</strong> to view and edit its details.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- TAB 4: SKILLS & KEYWORDS DATABASE                        -->
+    <!-- ======================================================== -->
+    <section id="tab-skills" class="tab-panel">
+      <div class="section-heading flex-between">
+        <div>
+          <h2>Skills &amp; Keywords Database</h2>
+          <p class="section-desc">Manage recognized skills and their keyword aliases used for resume parsing and ATS matching.</p>
+        </div>
+        <div class="skills-stats-badge" id="skills-stats-badge">
+          <span class="text-muted">Loading skills...</span>
+        </div>
+      </div>
+
+      <div class="grid-skills-layout">
+        <!-- Add Skill / Keyword Form Card -->
+        <div class="card skills-form-card">
+          <div class="card-header">
+            <h3>Add Skill or Alias Keyword</h3>
+          </div>
+          <div class="card-body">
+            <form id="add-skill-form">
+              <div class="form-group">
+                <label for="skill-input-name">Skill Name / Category <span class="required">*</span></label>
+                <input type="text" id="skill-input-name" list="existing-skills-datalist" placeholder="e.g. Python, Docker, JavaScript" required autocomplete="off">
+                <datalist id="existing-skills-datalist"></datalist>
+                <small class="helper-text">The canonical skill name. Type to pick existing or create a new one.</small>
+              </div>
+
+              <div class="form-group">
+                <label for="skill-input-keyword">Keyword Alias <span class="required">*</span></label>
+                <input type="text" id="skill-input-keyword" placeholder="e.g. js, es6, vanilla js" required autocomplete="off">
+                <small class="helper-text">Text pattern detected in resumes mapped to this skill.</small>
+              </div>
+
+              <div class="action-footer mt-4">
+                <button type="submit" class="btn btn-primary w-100" id="btn-submit-add-skill">
+                  + Add Keyword to Skill
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Skills Explorer Card -->
+        <div class="card skills-explorer-card">
+          <div class="card-header flex-between">
+            <div class="skills-search-wrapper">
+              <input type="text" id="skills-search-input" placeholder="Filter skills or keywords..." spellcheck="false">
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-skills">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              Refresh
+            </button>
+          </div>
+          <div class="card-body">
+            <div id="skills-list-container" class="skills-grid">
+              <div class="preview-empty">Loading skills database...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
