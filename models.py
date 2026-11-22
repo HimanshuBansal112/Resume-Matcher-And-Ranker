@@ -11,22 +11,16 @@ from database import Base
 
 class ResumeStatus(str, Enum):
     IN_QUEUE = "in_queue"
-    PROCESSED = "processed"
     REJECTED = "rejected"
     ACCEPTED = "accepted"
+    ERROR = "error"
 
 
 class ResumeIndex(Base):
     __tablename__ = "resume_index"
-
     filename: Mapped[str] = mapped_column(String(250), primary_key=True)
-
     status: Mapped[ResumeStatus] = mapped_column(SQLAlchemyEnum(ResumeStatus))
-
-    upload_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-
+    upload_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     file_type: Mapped[str] = mapped_column(String(20))
 
 
@@ -40,3 +34,11 @@ class JobDescriptions(Base):
     create_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class MatchDetails(Base):
+    __tablename__ = "match_details"
+    filename: Mapped[str] = mapped_column(String(250), primary_key=True)
+    jd_sno: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[ResumeStatus] = mapped_column(SQLAlchemyEnum(ResumeStatus))
+    full_details: Mapped[dict] = mapped_column(JSONB, default=dict)

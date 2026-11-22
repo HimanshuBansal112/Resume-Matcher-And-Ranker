@@ -8,14 +8,9 @@ const state = {
   apiBaseUrl: localStorage.getItem('apiBaseUrl') || 'http://127.0.0.1:8000',
   currentJd: null,
   skillsData: {},
+  historyData: { sno: null, jd: null, matches: [], filter: 'all' },
   queuedFiles: [],
-  sessionUploadedPaths: [],
-  defaultDummyPaths: [
-    'dummy/Alex_Morgan_AI_Engineer_Resume.pdf',
-    'dummy/Jordan_Taylor_Entry_Level_AI_Resume.pdf',
-    'dummy/Priya_Sharma_Senior_Web_Developer_Resume.docx',
-    'dummy/Alexander_Vance_Two-table.pdf'
-  ]
+  sessionUploadedPaths: []
 };
 
 // DOM Content Loaded Initializer
@@ -23,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initApiSettings();
   initNavigationTabs();
   initMatchTab();
+  initHistoryTab();
   initUploadTab();
   initJdTab();
   initSkillsTab();
@@ -218,31 +214,7 @@ function initMatchTab() {
   const snoInput = document.getElementById('match-jd-sno');
   const thresholdSlider = document.getElementById('match-threshold');
   const thresholdVal = document.getElementById('threshold-val');
-  const locationsTextarea = document.getElementById('match-locations');
   const runMatchBtn = document.getElementById('btn-run-match');
-
-  // Quick button helpers for locations
-  document.getElementById('btn-add-dummy-paths').addEventListener('click', () => {
-    const current = locationsTextarea.value.trim();
-    const toAdd = state.defaultDummyPaths.join('\n');
-    locationsTextarea.value = current ? `${current}\n${toAdd}` : toAdd;
-    showToast('Added 4 sample resume paths', 'info');
-  });
-
-  document.getElementById('btn-add-uploaded-paths').addEventListener('click', () => {
-    if (state.sessionUploadedPaths.length === 0) {
-      showToast('No resumes uploaded in this session yet. Upload some in the "Upload Resumes" tab.', 'info');
-      return;
-    }
-    const current = locationsTextarea.value.trim();
-    const toAdd = state.sessionUploadedPaths.join('\n');
-    locationsTextarea.value = current ? `${current}\n${toAdd}` : toAdd;
-    showToast(`Added ${state.sessionUploadedPaths.length} uploaded resume paths`, 'info');
-  });
-
-  document.getElementById('btn-clear-paths').addEventListener('click', () => {
-    locationsTextarea.value = '';
-  });
 
   // Threshold slider live display
   thresholdSlider.addEventListener('input', (e) => {
@@ -261,9 +233,6 @@ function initMatchTab() {
 
   // Pre-load default JD if available
   loadJdForMatch(parseInt(snoInput.value, 10) || 2);
-
-  // Start with empty paths box
-  locationsTextarea.value = '';
 
   // Run Matching
   runMatchBtn.addEventListener('click', async () => {
@@ -348,24 +317,15 @@ function renderJdPreview(jd) {
 async function executeMatch() {
   const snoInput = document.getElementById('match-jd-sno');
   const thresholdSlider = document.getElementById('match-threshold');
-  const locationsTextarea = document.getElementById('match-locations');
+  const finalizeCheckbox = document.getElementById('match-finalize');
   const runBtn = document.getElementById('btn-run-match');
 
   const sno = parseInt(snoInput.value, 10);
   const threshold = parseInt(thresholdSlider.value, 10) || 0;
-
-  const rawLocations = locationsTextarea.value
-    .split('\n')
-    .map(l => l.trim().replace(/^["']|["'],?$/g, '').trim())
-    .filter(l => l.length > 0);
+  const finalize = finalizeCheckbox ? finalizeCheckbox.checked : false;
 
   if (!sno || sno < 1) {
     showToast('Please specify a valid Job Description SNo', 'error');
-    return;
-  }
-
-  if (rawLocations.length === 0) {
-    showToast('Please provide at least one resume file path to evaluate', 'error');
     return;
   }
 
@@ -376,19 +336,22 @@ async function executeMatch() {
       <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
       <path d="M12 2a10 10 0 0 1 10 10"></path>
     </svg>
-    Analyzing Resumes...
+    Analyzing Queue Resumes...
   `;
 
   try {
-    const endpoint = `/match?jd_sno=${sno}&threshold=${threshold}`;
+    const endpoint = `/match?jd_sno=${sno}&threshold=${threshold}&finalize=${finalize}`;
     const result = await apiRequest(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(rawLocations)
+      method: 'POST'
     });
 
     renderMatchResults(result, threshold);
-    showToast(`Matching complete: ${result.matched ? result.matched.length : 0} candidate(s) passed`, 'success');
+    const passedCount = result.matched ? result.matched.length : 0;
+    if (finalize) {
+      showToast(`Matches saved to History & files moved (${passedCount} accepted)`, 'success');
+    } else {
+      showToast(`Matches saved to History (${passedCount} accepted)`, 'success');
+    }
   } catch (err) {
     showToast('Match evaluation failed: ' + err.message, 'error');
   } finally {
@@ -596,7 +559,362 @@ function createCandidateCard(c, rank) {
 }
 
 /* ========================================================
-   Tab 2: Upload Resumes Logic
+   Tab 2: Match History Logic
+   ======================================================== */
+
+function initHistoryTab() {
+  const fetchBtn = document.getElementById('btn-fetch-history');
+  const snoInput = document.getElementById('history-jd-sno');
+
+  fetchBtn.addEventListener('click', async () => {
+    const sno = parseInt(snoInput.value, 10);
+    if (!sno || sno < 1) {
+      showToast('Please enter a valid Job Description SNo', 'error');
+      return;
+    }
+    await loadHistory(sno);
+  });
+
+  snoInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      fetchBtn.click();
+    }
+  });
+
+  // Filter button listeners
+  const filterBtns = document.querySelectorAll('.history-filter-btn');
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      filterBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.historyData.filter = btn.dataset.filter;
+      renderHistoryCandidateList();
+    });
+  });
+}
+
+async function loadHistory(sno) {
+  const emptyHint = document.getElementById('history-empty-hint');
+  const resultsArea = document.getElementById('history-results-area');
+  const fetchBtn = document.getElementById('btn-fetch-history');
+
+  fetchBtn.disabled = true;
+  fetchBtn.textContent = 'Searching...';
+  emptyHint.style.display = 'block';
+  emptyHint.innerHTML = `Loading history for Job Description #${sno}...`;
+  resultsArea.style.display = 'none';
+
+  try {
+    const [jd, matches] = await Promise.all([
+      apiRequest(`/get_jd?sno=${sno}`).catch(err => {
+        console.warn('Could not fetch JD for history:', err);
+        return null;
+      }),
+      apiRequest(`/find_matches?jd_sno=${sno}`)
+    ]);
+
+    state.historyData.sno = sno;
+    state.historyData.jd = jd;
+    state.historyData.matches = Array.isArray(matches) ? matches : [];
+    state.historyData.filter = 'all';
+
+    renderHistoryJDDetails(jd, sno);
+    renderHistoryStats();
+    renderHistoryCandidateList();
+
+    emptyHint.style.display = 'none';
+    resultsArea.style.display = 'block';
+
+    // Reset filter buttons active state to 'all'
+    document.querySelectorAll('.history-filter-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === 'all');
+    });
+
+    showToast(`Loaded history for JD #${sno}: ${state.historyData.matches.length} record(s)`, 'info');
+  } catch (err) {
+    emptyHint.innerHTML = `<span class="text-danger">Failed to fetch history for JD #${sno}: ${escapeHtml(err.message)}</span>`;
+    showToast('Failed to load history: ' + err.message, 'error');
+  } finally {
+    fetchBtn.disabled = false;
+    fetchBtn.textContent = 'Find History';
+  }
+}
+
+function renderHistoryJDDetails(jd, sno) {
+  const badge = document.getElementById('history-jd-sno-badge');
+  const body = document.getElementById('history-jd-details-body');
+  badge.textContent = `JD #${sno}`;
+
+  if (!jd) {
+    body.innerHTML = `<div class="text-muted small">Job Description #${sno} requirements are not available in the database.</div>`;
+    return;
+  }
+
+  const parsed = jd.parsed || {};
+  const weights = jd.weights || {};
+  const mustHave = parsed.must_have || [];
+  const niceToHave = parsed.nice_to_have || [];
+  const expYears = parsed.experience_years ?? 'N/A';
+  const reqs = parsed.requirements || [];
+
+  body.innerHTML = `
+    <div class="jd-preview-content">
+      <div class="flex-between">
+        <h4>${escapeHtml(jd.title || 'Untitled JD')}</h4>
+        <span class="jd-meta-tag">Required Experience: ${expYears} yr${expYears === 1 ? '' : 's'}</span>
+      </div>
+
+      <div class="skill-tag-group mt-2">
+        <strong>Must-Have Skills (${mustHave.length})</strong>
+        <div class="pill-list">
+          ${mustHave.length > 0
+            ? mustHave.map(s => `<span class="pill pill-must-matched">${escapeHtml(s)}</span>`).join('')
+            : '<span class="text-muted small">None</span>'}
+        </div>
+      </div>
+
+      <div class="skill-tag-group mt-2">
+        <strong>Nice-to-Have Skills (${niceToHave.length})</strong>
+        <div class="pill-list">
+          ${niceToHave.length > 0
+            ? niceToHave.map(s => `<span class="pill pill-nice-matched">${escapeHtml(s)}</span>`).join('')
+            : '<span class="text-muted small">None</span>'}
+        </div>
+      </div>
+
+      ${reqs.length > 0 ? `
+        <div class="skill-tag-group mt-2">
+          <strong>Key Requirements (${reqs.length})</strong>
+          <ul class="text-muted small" style="margin-left: 1.25rem; margin-top: 0.25rem;">
+            ${reqs.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
+          </ul>
+        </div>
+      ` : ''}
+
+      <div class="weights-box mt-3">
+        <span class="meta-label">Criteria Scoring Weights</span>
+        <div class="small text-muted" style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
+          <span>Must-Have: <strong>${weights.must_have ?? 0.5}</strong></span>
+          <span>Nice-to-Have: <strong>${weights.nice_to_have ?? 0.3}</strong></span>
+          <span>Experience: <strong>${weights.experience_years ?? 0.2}</strong></span>
+          <span>Requirements: <strong>${weights.requirements ?? 0.2}</strong></span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderHistoryStats() {
+  const matches = state.historyData.matches || [];
+  const totalCount = matches.length;
+  const acceptedCount = matches.filter(m => m.status === 'accepted').length;
+  const rejectedCount = matches.filter(m => m.status === 'rejected').length;
+  const errorCount = matches.filter(m => m.status === 'error').length;
+
+  document.getElementById('history-total-count').textContent = totalCount;
+  document.getElementById('count-all').textContent = totalCount;
+  document.getElementById('count-accepted').textContent = acceptedCount;
+  document.getElementById('count-rejected').textContent = rejectedCount;
+  document.getElementById('count-error').textContent = errorCount;
+
+  document.getElementById('history-summary-stats').textContent = 
+    `${totalCount} candidate resume(s) recorded: ${acceptedCount} accepted, ${rejectedCount} rejected, ${errorCount} error(s).`;
+}
+
+function renderHistoryCandidateList() {
+  const list = document.getElementById('history-candidates-list');
+  const allMatches = state.historyData.matches || [];
+  const filter = state.historyData.filter || 'all';
+
+  const filtered = allMatches.filter(item => {
+    if (filter === 'all') return true;
+    return item.status === filter;
+  });
+
+  list.innerHTML = '';
+
+  if (filtered.length === 0) {
+    list.innerHTML = `
+      <div class="card">
+        <div class="card-body text-center text-muted py-4">
+          No ${filter === 'all' ? '' : filter} match records found for this Job Description.
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  filtered.forEach((entry, idx) => {
+    list.appendChild(createHistoryCard(entry, idx + 1));
+  });
+}
+
+function createHistoryCard(entry, index) {
+  const card = document.createElement('div');
+  card.className = 'candidate-card';
+
+  const status = (entry.status || 'unknown').toLowerCase();
+  const full = entry.full_details || {};
+  const cand = full.candidate_details || {};
+  const matchDetail = full.match_detail || {};
+  const score = full.percentage_match != null ? Math.round(full.percentage_match * 10) / 10 : null;
+
+  let statusBadgeClass = 'status-badge-accepted';
+  if (status === 'rejected') statusBadgeClass = 'status-badge-rejected';
+  else if (status === 'error') statusBadgeClass = 'status-badge-error';
+
+  // If this entry was an error
+  if (status === 'error' || full.error) {
+    card.innerHTML = `
+      <div class="candidate-card-header">
+        <div class="candidate-title-area">
+          <span class="rank-badge">#${index}</span>
+          <div>
+            <h4 class="candidate-name">${escapeHtml(entry.filename || 'Unknown File')}</h4>
+            <span class="text-muted small">${escapeHtml(full.resume_location || '')}</span>
+          </div>
+        </div>
+        <span class="status-badge ${statusBadgeClass}">Error</span>
+      </div>
+      <div class="candidate-card-body">
+        <div class="failed-item">
+          <span class="text-danger"><strong>Error details:</strong> ${escapeHtml(full.error || 'Parsing or processing error')}</span>
+        </div>
+      </div>
+    `;
+    return card;
+  }
+
+  // Normal Accepted or Rejected entry
+  const matchedMust = matchDetail.matched_must || [];
+  const missingMust = matchDetail.missing_must || [];
+  const matchedNice = matchDetail.matched_nice || [];
+  const missingNice = matchDetail.missing_nice || [];
+
+  const basePct = matchDetail.base_percentage != null ? Math.round(matchDetail.base_percentage) + '%' : 'N/A';
+  const semPct = matchDetail.semantic_percentage != null ? Math.round(matchDetail.semantic_percentage) + '%' : 'N/A';
+
+  const expYears = cand.experience_years != null ? `${cand.experience_years} years` : 'Undetected';
+  const expConf = cand.experience_confidence ? `(${cand.experience_confidence} conf)` : '';
+
+  const evidence = matchDetail.semantic_evidence || null;
+  const hasEvidence = evidence && Object.keys(evidence).length > 0;
+  const evidenceId = `hist-ev-${index}-${Date.now()}`;
+
+  card.innerHTML = `
+    <div class="candidate-card-header">
+      <div class="candidate-title-area">
+        <span class="rank-badge">#${index}</span>
+        <div>
+          <h4 class="candidate-name">${escapeHtml(cand.name || entry.filename || 'Unnamed Candidate')}</h4>
+          <span class="text-muted small">${escapeHtml(full.resume_location || entry.filename)}</span>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span class="status-badge ${statusBadgeClass}">${escapeHtml(status)}</span>
+        ${score != null ? `
+          <div class="score-badge ${score >= 70 ? 'score-high' : score >= 45 ? 'score-mid' : 'score-low'}">
+            ${score}% <span class="small font-normal">Match</span>
+          </div>
+        ` : ''}
+      </div>
+    </div>
+
+    <div class="candidate-card-body">
+      <!-- Contact & Experience Row -->
+      <div class="candidate-meta-grid">
+        <div class="meta-item">
+          <span class="meta-label">Email</span>
+          <span class="meta-val">${escapeHtml(cand.email || 'Not found')}</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Phone</span>
+          <span class="meta-val">${escapeHtml(cand.phone || 'Not found')}</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Detected Experience</span>
+          <span class="meta-val">${expYears} <small class="text-muted">${expConf}</small></span>
+        </div>
+      </div>
+
+      <!-- Score Breakdown Row -->
+      <div class="score-breakdown-row">
+        <div class="score-stat">
+          <div class="score-stat-label">Base Rule Score (Skills + Exp)</div>
+          <div class="score-stat-val">${basePct}</div>
+        </div>
+        <div class="score-stat">
+          <div class="score-stat-label">Semantic Match Score</div>
+          <div class="score-stat-val">${semPct}</div>
+        </div>
+      </div>
+
+      <!-- Skills Evaluation Grid -->
+      <div class="skills-evaluation-grid">
+        <div class="skill-eval-col">
+          <h5>Must-Have Skills (${matchedMust.length}/${matchedMust.length + missingMust.length})</h5>
+          <div class="pill-list">
+            ${matchedMust.map(s => `<span class="pill pill-must-matched">&check; ${escapeHtml(s)}</span>`).join('')}
+            ${missingMust.map(s => `<span class="pill pill-must-missing">&times; ${escapeHtml(s)}</span>`).join('')}
+            ${matchedMust.length === 0 && missingMust.length === 0 ? '<span class="text-muted small">None</span>' : ''}
+          </div>
+        </div>
+
+        <div class="skill-eval-col">
+          <h5>Nice-to-Have Skills (${matchedNice.length}/${matchedNice.length + missingNice.length})</h5>
+          <div class="pill-list">
+            ${matchedNice.map(s => `<span class="pill pill-nice-matched">&check; ${escapeHtml(s)}</span>`).join('')}
+            ${missingNice.map(s => `<span class="pill pill-nice-missing">${escapeHtml(s)}</span>`).join('')}
+            ${matchedNice.length === 0 && missingNice.length === 0 ? '<span class="text-muted small">None</span>' : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Semantic Evidence Dropdown -->
+      ${hasEvidence ? `
+        <button type="button" class="evidence-toggle-btn" data-target="${evidenceId}">
+          <span>Semantic Fit Breakdown (${Object.keys(evidence).length} Requirements)</span>
+          <span class="toggle-icon">&darr;</span>
+        </button>
+        <div id="${evidenceId}" class="evidence-panel">
+          <table class="evidence-table">
+            <thead>
+              <tr>
+                <th style="width: 35%;">Requirement</th>
+                <th style="width: 50%;">Matched Resume Snippet</th>
+                <th style="width: 15%;">Similarity</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${Object.entries(evidence).map(([req, ev]) => `
+                <tr>
+                  <td><strong>${escapeHtml(req)}</strong></td>
+                  <td>${escapeHtml(ev.snippet || 'None')}</td>
+                  <td><span class="evidence-similarity">${Math.round((ev.similarity || 0) * 100)}%</span></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : ''}
+    </div>
+  `;
+
+  if (hasEvidence) {
+    const toggleBtn = card.querySelector(`.evidence-toggle-btn[data-target="${evidenceId}"]`);
+    const panel = card.querySelector(`#${evidenceId}`);
+    toggleBtn.addEventListener('click', () => {
+      const isVisible = panel.style.display === 'block';
+      panel.style.display = isVisible ? 'none' : 'block';
+      toggleBtn.querySelector('.toggle-icon').innerHTML = isVisible ? '&darr;' : '&uarr;';
+    });
+  }
+
+  return card;
+}
+
+/* ========================================================
+   Tab 3: Upload Resumes Logic
    ======================================================== */
 
 function initUploadTab() {

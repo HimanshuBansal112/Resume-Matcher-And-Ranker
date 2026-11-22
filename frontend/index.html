@@ -51,6 +51,13 @@
           </svg>
           Match &amp; Rank
         </button>
+        <button class="nav-tab" data-tab="tab-history">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 8v4l3 3"></path>
+            <circle cx="12" cy="12" r="9"></circle>
+          </svg>
+          Match History
+        </button>
         <button class="nav-tab" data-tab="tab-upload">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -127,24 +134,41 @@
           </div>
         </div>
 
-        <!-- Resume File Locations Card -->
+        <!-- Match Execution & Finalize Options Card -->
         <div class="card">
-          <div class="card-header flex-between">
-            <h3>2. Resumes to Evaluate</h3>
-            <div class="button-group-sm">
-              <button type="button" class="btn btn-link btn-xs" id="btn-add-dummy-paths">+ Add Sample Resumes</button>
-              <button type="button" class="btn btn-link btn-xs" id="btn-add-uploaded-paths">+ Add Uploaded</button>
-              <button type="button" class="btn btn-link btn-xs text-danger" id="btn-clear-paths">Clear</button>
-            </div>
+          <div class="card-header">
+            <h3>2. Queue Processing &amp; Finalize</h3>
           </div>
           <div class="card-body">
-            <div class="form-group">
-              <label for="match-locations">Resume File Paths (one per line &mdash; e.g. <code>uploaded/in_queue/resume.pdf</code>)</label>
-              <textarea id="match-locations" rows="7" wrap="off" placeholder="Paste or type resume file paths here, one per line:&#10;uploaded/in_queue/sample_resume.pdf&#10;uploaded/in_queue/another_resume.docx" spellcheck="false"></textarea>
-              <small class="helper-text">Enter relative paths (e.g. <code>uploaded/in_queue/...</code>) or full file paths accessible on the server machine.</small>
+            <div class="queue-info-box">
+              <div class="queue-info-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                </svg>
+              </div>
+              <div>
+                <strong>Automatic Queue Evaluation</strong>
+                <p class="text-muted small">Evaluates all resumes currently in the queue (<code>uploaded/in_queue/</code>).</p>
+              </div>
             </div>
 
-            <div class="action-footer">
+            <!-- Finalize Toggle Option -->
+            <div class="finalize-option-box">
+              <label class="checkbox-container">
+                <input type="checkbox" id="match-finalize">
+                <span class="checkbox-label">
+                  <strong>Move Resumes to Processed Folders</strong>
+                  <span class="text-muted small display-block">
+                    Match results are always saved to History. Check this to also move files into <code>accepted/</code>, <code>rejected/</code>, or <code>error/</code> folders.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            <div class="action-footer mt-4">
               <button type="button" class="btn btn-primary btn-lg w-100" id="btn-run-match">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -184,7 +208,72 @@
     </section>
 
     <!-- ======================================================== -->
-    <!-- TAB 2: UPLOAD RESUMES                                    -->
+    <!-- TAB 2: MATCH HISTORY                                     -->
+    <!-- ======================================================== -->
+    <section id="tab-history" class="tab-panel">
+      <div class="section-heading">
+        <div>
+          <h2>Match History</h2>
+          <p class="section-desc">Search past finalized candidate evaluations and review job criteria by Job Description SNo.</p>
+        </div>
+      </div>
+
+      <!-- History Lookup Card -->
+      <div class="card mb-4">
+        <div class="card-body">
+          <div class="form-row" style="align-items: flex-end;">
+            <div class="form-group flex-1" style="margin-bottom: 0;">
+              <label for="history-jd-sno">Job Description Serial Number (SNo)</label>
+              <div class="input-with-button">
+                <input type="number" id="history-jd-sno" min="1" value="1" placeholder="e.g. 1 or 2">
+                <button type="button" class="btn btn-primary" id="btn-fetch-history">Find History</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- History Results Area -->
+      <div id="history-results-area" style="display: none;">
+        <!-- 1. Job Description Details Summary -->
+        <div class="card mb-4">
+          <div class="card-header flex-between">
+            <h3>Job Description Requirements</h3>
+            <span class="history-jd-sno-tag" id="history-jd-sno-badge">JD #1</span>
+          </div>
+          <div class="card-body" id="history-jd-details-body">
+            <!-- Populated dynamically with JD title, experience, must-have, nice-to-have, requirements, weights -->
+          </div>
+        </div>
+
+        <!-- 2. Candidate Match Records -->
+        <div class="results-container mt-4">
+          <div class="results-header">
+            <div>
+              <h3>Candidate Match Records (<span id="history-total-count">0</span>)</h3>
+              <p class="text-muted" id="history-summary-stats">Summary of processed resumes for this Job Description.</p>
+            </div>
+            <!-- Status Filter Tabs -->
+            <div class="history-filter-group" id="history-filter-group">
+              <button type="button" class="history-filter-btn active" data-filter="all">All (<span id="count-all">0</span>)</button>
+              <button type="button" class="history-filter-btn filter-accepted" data-filter="accepted">Accepted (<span id="count-accepted">0</span>)</button>
+              <button type="button" class="history-filter-btn filter-rejected" data-filter="rejected">Rejected (<span id="count-rejected">0</span>)</button>
+              <button type="button" class="history-filter-btn filter-error" data-filter="error">Errors (<span id="count-error">0</span>)</button>
+            </div>
+          </div>
+
+          <div id="history-candidates-list" class="candidates-list"></div>
+        </div>
+      </div>
+
+      <!-- Empty / Initial Hint -->
+      <div id="history-empty-hint" class="preview-empty card" style="padding: 2.5rem 1rem;">
+        Enter a Job Description SNo above and click <strong>Find History</strong> to view both JD requirements and candidate match records.
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- TAB 3: UPLOAD RESUMES                                    -->
     <!-- ======================================================== -->
     <section id="tab-upload" class="tab-panel">
       <div class="section-heading">

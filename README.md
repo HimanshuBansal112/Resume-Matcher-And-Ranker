@@ -18,7 +18,7 @@ Includes an interactive recruiter web dashboard built with modern **HTML5, CSS3,
 * **Skills Taxonomy & Keyword Mapping**:
   * Dynamically maps canonical skill categories to diverse keyword aliases (e.g., recognizing `es6` and `js` as `JavaScript`).
 * **Interactive Web Dashboard**:
-  * Organized into 4 dedicated workspaces: **Match & Rank**, **Upload Resumes**, **Job Descriptions**, and **Skills Database**.
+  * Organized into 5 dedicated workspaces: **Match & Rank**, **Match History**, **Upload Resumes**, **Job Descriptions**, and **Skills Database**.
 
 ---
 
@@ -87,15 +87,20 @@ Open the web interface in your browser through any preferred method:
 1. **Match & Rank**:
    * Enter a Job Description ID (e.g. `1` or `2`) and click **Load JD** to inspect criteria.
    * Adjust the candidate score threshold slider (0%–100%).
-   * Enter resume file paths (one per line, e.g. `dummy/...` or `uploaded/in_queue/...`).
-   * Click **Run Match & Rank** to view candidate scores, matched/missing skill badges, and expandable semantic evidence breakdowns.
-2. **Upload Resumes**:
+   * Match results are automatically saved to database history.
+   * Optionally check **Move Resumes to Processed Folders** (`finalize=True`) to also move evaluated resumes into `accepted/`, `rejected/`, or `error/` subdirectories.
+   * Click **Run Match & Rank** to automatically evaluate all resumes in `uploaded/in_queue/`.
+2. **Match History**:
+   * Enter a Job Description SNo to query past evaluations (`GET /find_matches`).
+   * Displays both the full JD requirements and all candidate match records.
+   * Filter candidates by status: **Accepted**, **Rejected**, or **Errors**.
+3. **Upload Resumes**:
    * Drag-and-drop `.pdf` and `.docx` candidate resumes into the processing queue.
    * Resumes are placed in `uploaded/in_queue/` for evaluation.
-3. **Job Descriptions Manager**:
+4. **Job Descriptions Manager**:
    * Author new job descriptions with custom scoring weights.
    * Retrieve and update existing job descriptions by serial number.
-4. **Skills Database**:
+5. **Skills Database**:
    * Explore and search the recognized skills repository.
    * Add new skill categories and link alias keywords.
    * Manage existing keywords to keep the parsing taxonomy current.
@@ -129,11 +134,12 @@ Resume-Matcher-And-Ranker/
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `POST` | `/match?jd_sno={id}&threshold={%}` | Evaluates candidate resume paths against a JD |
+| `POST` | `/match?jd_sno={id}&threshold={%}&finalize={bool}` | Evaluates queue resumes & saves to history (moves files when finalize=true) |
+| `GET`  | `/find_matches?jd_sno={id}` | Retrieves past match history records by JD SNo |
 | `POST` | `/upload_resumes` | Uploads `.pdf` and `.docx` files to the processing queue |
-| `GET` | `/get_jd?sno={id}` | Fetches job description details by serial number |
+| `GET`  | `/get_jd?sno={id}` | Fetches job description details by serial number |
 | `POST` | `/create_jds` | Creates new job descriptions with criteria weights |
 | `POST` | `/edit_jd?sno={id}` | Updates existing job description fields |
-| `GET` | `/get_skills` | Retrieves the full skills and keyword alias database |
+| `GET`  | `/get_skills` | Retrieves the full skills and keyword alias database |
 | `POST` | `/add_skill?keyword={k}&skill_name={s}` | Associates a keyword alias with a skill |
 | `POST` | `/remove_skill?keyword={k}&skill_name={s}` | Removes a keyword alias from a skill |

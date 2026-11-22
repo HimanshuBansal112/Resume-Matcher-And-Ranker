@@ -18,11 +18,12 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from gliner import GLiNER
 from pydantic import BaseModel, Field
+from sqlalchemy import exists, select
 
 from database import Base, SessionLocal, engine
-from models import JobDescriptions, ResumeIndex, ResumeStatus
-from sections import *
-from semantic import *
+from models import JobDescriptions, MatchDetails, ResumeIndex, ResumeStatus
+from sections import EXP_START, PROJ_START, get_exp_section, get_section
+from semantic import bullet_requirements, embed, load_embedder, semantic_fit, to_chunks
 
 logging.basicConfig(
     filename="app.log",
@@ -68,12 +69,48 @@ def remove_resume_index(entries: list[ResumeIndex]):
                 session.delete(entry)
 
 
+def update_resume_status(filename: str, status: ResumeStatus):
+    with SessionLocal() as session:
+        entry = session.get(ResumeIndex, filename)
+
+        if not entry:
+            return False
+
+        entry.status = status
+        session.commit()
+        return True
+
+
 def clear_buffer():
     for item in buffer_dir.iterdir():
         if item.is_dir():
             shutil.rmtree(item)
         else:
             item.unlink()
+
+
+def insert_match_detail(entry: MatchDetails):
+    with SessionLocal() as session:
+        session.add(entry)
+        session.commit()
+
+
+def get_match_details(jd_sno: int):
+    with SessionLocal() as session:
+        return session.scalars(
+            select(MatchDetails).where(MatchDetails.jd_sno == jd_sno)
+        ).all()
+
+
+def exist_match_detail(jd_sno: int, filename: str):
+    with SessionLocal() as session:
+        return session.scalar(
+            select(
+                exists().where(
+                    MatchDetails.filename == filename, MatchDetails.jd_sno == jd_sno
+                )
+            )
+        )
 
 
 def get_jd(sno: int):
@@ -121,6 +158,7 @@ async def lifespan(app: FastAPI):
     os.makedirs("uploaded/processed", exist_ok=True)
     os.makedirs("uploaded/processed/rejected", exist_ok=True)
     os.makedirs("uploaded/processed/accepted", exist_ok=True)
+    os.makedirs("uploaded/processed/error", exist_ok=True)
     os.makedirs("uploaded/in_queue", exist_ok=True)
     os.makedirs("uploaded/buffer", exist_ok=True)
     Base.metadata.create_all(bind=engine)
@@ -161,6 +199,7 @@ app.add_middleware(
 
 @app.post("/add_skill")
 def add_skill(keyword: str, skill_name: str) -> str:
+    keyword = keyword.lower()
     skills = []
     skills_category = {}
     with open("skills.json", "r", encoding="utf-8") as file:
@@ -168,6 +207,7 @@ def add_skill(keyword: str, skill_name: str) -> str:
     with open("skills_category.json", "r", encoding="utf-8") as file:
         skills_category = json.load(file)
 
+    skills, skills_category = lowercase_keyword_skill(skills, skills_category)
     skills_category, skills = remove_redundant_values(skills_category, skills)
 
     if keyword in skills:
@@ -201,6 +241,7 @@ def add_skill(keyword: str, skill_name: str) -> str:
 
 @app.post("/remove_skill")
 def remove_skill(keyword: str, skill_name: str) -> str:
+    keyword = keyword.lower()
     skills = []
     skills_category = {}
     found = True
@@ -209,6 +250,7 @@ def remove_skill(keyword: str, skill_name: str) -> str:
     with open("skills_category.json", "r", encoding="utf-8") as file:
         skills_category = json.load(file)
 
+    skills, skills_category = lowercase_keyword_skill(skills, skills_category)
     skills_category, skills = remove_redundant_values(skills_category, skills)
 
     skills_category_values = [
@@ -251,6 +293,7 @@ def read_skill():
     with open("skills_category.json", "r", encoding="utf-8") as file:
         skills_category = json.load(file)
 
+    skills, skills_category = lowercase_keyword_skill(skills, skills_category)
     skills_category, skills = remove_redundant_values(skills_category, skills)
 
     skills_category_values = [
@@ -294,6 +337,22 @@ def repair_skill(
     return skills, skills_category_values, skills_category
 
 
+def lowercase_keyword_skill(skills: list[str], skills_category: dict):
+    new_skills = list({skill.lower() for skill in skills})
+    new_skills_category = {
+        k: list({item.lower() for item in v}) for k, v in skills_category.items()
+    }
+
+    if new_skills != skills:
+        with open("skills.json", "w", encoding="utf-8") as file:
+            json.dump(new_skills, file, indent=4)
+    if new_skills_category != skills_category:
+        with open("skills_category.json", "w", encoding="utf-8") as file:
+            json.dump(new_skills_category, file, indent=4)
+
+    return new_skills, new_skills_category
+
+
 def remove_redundant_values(dictionary: dict, list1: list):
     counts = Counter(
         item
@@ -327,7 +386,7 @@ async def upload_files(files: list[UploadFile] = File(...)):
     resumes = []
 
     for i, file in enumerate(files):
-        filename = file.filename
+        filename = Path(file.filename or "").name
         extension = "." + filename.split(".")[-1] if "." in filename else ""
         extension = extension.lower()
         if extension not in allowed_extensions:
@@ -381,6 +440,8 @@ def fallback_for_docx(location: str) -> str:
 @app.get("/get_jd")
 def get_jd_api(sno: int):
     jd = get_jd(sno)
+    if jd is None:
+        raise HTTPException(status_code=404, detail="Job description not found")
     jd = {column.name: getattr(jd, column.name) for column in jd.__table__.columns}
     return jd
 
@@ -395,21 +456,21 @@ def create_jds(in_jds: list[JobDescriptionClass]):
             not_found_parsed = [key for key in required if key not in in_jd.parsed]
             if not_found_parsed:
                 raise HTTPException(
-                    status_code=404,
+                    status_code=400,
                     detail=f"{not_found_parsed} Key(s) missing in parsed",
                 )
 
             not_found_weight = [key for key in required if key not in in_jd.weights]
             if not_found_weight:
                 raise HTTPException(
-                    status_code=404,
+                    status_code=400,
                     detail=f"{not_found_weight} Key(s) missing in weights",
                 )
 
             for skill in in_jd.parsed["must_have"]:
                 if skill in in_jd.parsed["nice_to_have"]:
                     raise HTTPException(
-                        status_code=404,
+                        status_code=400,
                         detail="Error! Duplicate skill(s) found in both must_have and nice_to_have",
                     )
 
@@ -429,7 +490,7 @@ def create_jds(in_jds: list[JobDescriptionClass]):
             out_jds.append(out_jd)
         else:
             raise HTTPException(
-                status_code=404, detail="Error! Empty Job Description(s)"
+                status_code=400, detail="Error! Empty Job Description(s)"
             )
 
     insert_jds(out_jds)
@@ -443,25 +504,30 @@ def edit_jd(sno: int, new_jd: JobDescriptionClass):
             status_code=404,
             detail=f"Job Description with Serial Number: {sno} does not exist",
         )
+    if get_match_details(sno):
+        raise HTTPException(
+            status_code=409,
+            detail="This JD already has saved results. Create a new JD instead of editing it.",
+        )
     required = ["must_have", "nice_to_have", "experience_years", "requirements"]
 
     if new_jd:
         not_found_parsed = [key for key in required if key not in new_jd.parsed]
         if not_found_parsed:
             raise HTTPException(
-                status_code=404, detail=f"{not_found_parsed} Key(s) missing in parsed"
+                status_code=400, detail=f"{not_found_parsed} Key(s) missing in parsed"
             )
 
         not_found_weight = [key for key in required if key not in new_jd.weights]
         if not_found_weight:
             raise HTTPException(
-                status_code=404, detail=f"{not_found_weight} Key(s) missing in weights"
+                status_code=400, detail=f"{not_found_weight} Key(s) missing in weights"
             )
 
         for skill in new_jd.parsed["must_have"]:
             if skill in new_jd.parsed["nice_to_have"]:
                 raise HTTPException(
-                    status_code=404,
+                    status_code=400,
                     detail="Error! Duplicate skill(s) found in both must_have and nice_to_have",
                 )
 
@@ -479,7 +545,7 @@ def edit_jd(sno: int, new_jd: JobDescriptionClass):
             weights=new_jd.weights,
         )
     else:
-        raise HTTPException(status_code=404, detail="Error! Empty Job Description(s)")
+        raise HTTPException(status_code=400, detail="Error! Empty Job Description(s)")
 
     update_jd(sno, parsed_jd)
     return {"message": "Successfully added Job Descriptions"}
@@ -719,8 +785,101 @@ def score_candidate(
     return match_detail
 
 
+def create_resume_entry_auto(filename: str, status: ResumeStatus):
+    extension = "." + filename.split(".")[-1] if "." in filename else ""
+    extension = extension.lower()
+
+    resume_entry = [
+        ResumeIndex(
+            filename=filename, status=status, upload_time=None, file_type=extension
+        )
+    ]
+    return resume_entry
+
+
+def move(location: str, sno: int, status: ResumeStatus, details: dict | None = None):
+    FOLDERS = {
+        ResumeStatus.ACCEPTED: "accepted",
+        ResumeStatus.REJECTED: "rejected",
+        ResumeStatus.ERROR: "error",
+    }
+    src = Path(location)
+    if src.parent.resolve() != in_queue_dir.resolve():
+        raise ValueError(f"Not an in-queue file: {location}")
+    dest_dir = Path("uploaded/processed") / FOLDERS[status] / str(sno)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / src.name
+    shutil.move(str(src), str(dest))
+    if not update_resume_status(src.name, status):
+        add_resume_index(create_resume_entry_auto(src.name, status))
+    insert_match_detail(
+        MatchDetails(
+            filename=src.name,
+            status=status,
+            jd_sno=sno,
+            full_details={**(details or {}), "resume_location": str(dest)},
+        )
+    )
+    return str(dest)
+
+
+def add_match_detail(
+    location: str, sno: int, status: ResumeStatus, details: dict | None = None
+):
+    src = Path(location)
+    if src.parent.resolve() != in_queue_dir.resolve():
+        raise ValueError(f"Not an in-queue file: {location}")
+    if not update_resume_status(src.name, status):
+        add_resume_index(create_resume_entry_auto(src.name, status))
+    insert_match_detail(
+        MatchDetails(
+            filename=src.name,
+            status=status,
+            jd_sno=sno,
+            full_details={**(details or {}), "resume_location": location},
+        )
+    )
+
+
+def get_in_queue():
+    return sorted(str(p) for p in in_queue_dir.iterdir() if p.is_file())
+
+
+@app.get("/find_matches")
+def find(jd_sno: int):
+    details = get_match_details(jd_sno)
+    return [
+        {
+            column.name: getattr(entry, column.name)
+            for column in MatchDetails.__table__.columns
+        }
+        for entry in details
+    ]
+
+
+def verify(locations: list[str], jd_sno: int):
+    issues = []
+    for location in locations:
+        filename = Path(location).name
+        if exist_match_detail(jd_sno, filename):
+            issues.append({"Job_Description_No": jd_sno, "File Name": filename})
+    return issues
+
+
 @app.post("/match")
-def match(locations: list[str], jd_sno: int, threshold: int = Query(0, ge=0, le=100)):
+def match(jd_sno: int, threshold: int = Query(0, ge=0, le=100), finalize: bool = False):
+    with open("skills.json", "r", encoding="utf-8") as f:
+        if not json.load(f):
+            raise HTTPException(
+                status_code=400, detail="skills.json is empty: add skills first"
+            )
+    locations = get_in_queue()
+    verify_output = verify(locations, jd_sno)
+    if verify_output:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Existing records found: {verify_output}",
+        )
     skills_category = None
 
     with open("skills_category.json", "r", encoding="utf-8") as file:
@@ -731,7 +890,7 @@ def match(locations: list[str], jd_sno: int, threshold: int = Query(0, ge=0, le=
         for v in vals:
             if v.lower() in keyword2skill:
                 raise HTTPException(
-                    status_code=404,
+                    status_code=409,
                     detail=f"Duplicate keyword found: {v.lower()} under more than one skill name. Skills are case-insensitive",
                 )
             keyword2skill[v.lower()] = k
@@ -779,22 +938,50 @@ def match(locations: list[str], jd_sno: int, threshold: int = Query(0, ge=0, le=
                     person["message"],
                 )
         except Exception as e:
-            failed.append({"resume_location": location, "error": str(e)})
+            if finalize:
+                err_loc = move(location, jd_sno, ResumeStatus.ERROR, {"error": str(e)})
+            else:
+                add_match_detail(
+                    location, jd_sno, ResumeStatus.ERROR, {"error": str(e)}
+                )
+                err_loc = location
+            failed.append({"resume_location": err_loc, "error": str(e)})
             continue
 
         sem = semantic_fit(requirements, req_vecs, person["chunks"])
         match_detail = score_candidate(keyword2skill, jd, person, check_exp, total, sem)
 
+        single_detail = {
+            "candidate_details": person["payload"],
+            "job_description_serial_number": jd["sno"],
+            "job_description_title": jd["title"],
+            "resume_location": location,
+            "percentage_match": match_detail["total_percentage"],
+            "match_detail": match_detail,
+        }
+
         if match_detail["total_percentage"] >= threshold:
-            matched.append(
-                {
-                    "candidate_details": person["payload"],
-                    "job_description_serial_number": jd["sno"],
-                    "job_description_title": jd["title"],
-                    "resume_location": location,
-                    "percentage_match": match_detail["total_percentage"],
-                    "match_detail": match_detail,
-                }
-            )
+            if finalize:
+                accept_location = move(
+                    location, jd_sno, ResumeStatus.ACCEPTED, single_detail
+                )
+                matched.append(
+                    {
+                        "candidate_details": person["payload"],
+                        "job_description_serial_number": jd["sno"],
+                        "job_description_title": jd["title"],
+                        "resume_location": accept_location,
+                        "percentage_match": match_detail["total_percentage"],
+                        "match_detail": match_detail,
+                    }
+                )
+            else:
+                add_match_detail(location, jd_sno, ResumeStatus.ACCEPTED, single_detail)
+                matched.append(single_detail)
+        else:
+            if finalize:
+                move(location, jd_sno, ResumeStatus.REJECTED, single_detail)
+            else:
+                add_match_detail(location, jd_sno, ResumeStatus.REJECTED, single_detail)
     matched.sort(key=lambda x: x["percentage_match"], reverse=True)
     return {"matched": matched, "failed": failed}
