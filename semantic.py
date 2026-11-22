@@ -1,4 +1,5 @@
 import re
+
 import numpy as np
 
 LO, HI = 0.25, 0.60
@@ -9,6 +10,7 @@ embedder = None
 def load_embedder(name: str = "all-MiniLM-L6-v2"):
     global embedder
     from sentence_transformers import SentenceTransformer
+
     embedder = SentenceTransformer(name)
 
 
@@ -37,6 +39,8 @@ def semantic_fit(requirements, req_vecs, chunks, embed_fn=embed, lo=LO, hi=HI):
     sims = req_vecs @ embed_fn(chunks).T
     best_i, best = sims.argmax(axis=1), sims.max(axis=1)
     fit = float(np.clip((best - lo) / (hi - lo), 0, 1).mean())
-    evidence = {r: {"snippet": chunks[i], "similarity": round(float(s), 2)}
-                for r, i, s in zip(requirements, best_i, best)}
+    evidence = {
+        r: {"snippet": chunks[i], "similarity": round(float(s), 2)}
+        for r, i, s in zip(requirements, best_i, best)
+    }
     return fit, evidence

@@ -1,11 +1,12 @@
-from datetime import datetime, date, timezone
+from datetime import datetime
+from enum import Enum
 
-from sqlalchemy import func, TEXT, String, Integer, DateTime, Enum as SQLAlchemyEnum
+from sqlalchemy import TEXT, DateTime, Integer, String, func
+from sqlalchemy import Enum as SQLAlchemyEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
-from enum import Enum
 
 
 class ResumeStatus(str, Enum):
@@ -23,11 +24,11 @@ class ResumeIndex(Base):
     status: Mapped[ResumeStatus] = mapped_column(SQLAlchemyEnum(ResumeStatus))
 
     upload_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False
+        DateTime(timezone=True), nullable=False
     )
-    
+
     file_type: Mapped[str] = mapped_column(String(20))
+
 
 class JobDescriptions(Base):
     __tablename__ = "job_descriptions"
@@ -36,4 +37,6 @@ class JobDescriptions(Base):
     raw_text: Mapped[str] = mapped_column(TEXT)
     parsed: Mapped[dict] = mapped_column(JSONB)
     weights: Mapped[dict] = mapped_column(JSONB, default=dict)
-    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    create_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

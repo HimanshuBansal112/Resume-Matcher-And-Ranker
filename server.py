@@ -1,34 +1,36 @@
+import json
 import logging
 import os
-import shutil
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from pathlib import Path
 import re
-import json
+import shutil
 from collections import Counter
-
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pymupdf
+from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter
 from docling.utils.model_downloader import download_models
-import pymupdf
 from docx import Document
-from docling.datamodel.base_models import InputFormat
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from gliner import GLiNER
+from pydantic import BaseModel, Field
 
-from database import engine, Base, SessionLocal, get_db
-from models import ResumeIndex, ResumeStatus, JobDescriptions
+from database import Base, SessionLocal, engine
+from models import JobDescriptions, ResumeIndex, ResumeStatus
 from sections import *
 from semantic import *
 
 logging.basicConfig(
-    filename='app.log',
+    filename="app.log",
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
+logger = logging.getLogger(__name__)
 
 in_queue_dir = Path("uploaded/in_queue")
 buffer_dir = Path("uploaded/buffer")
@@ -36,11 +38,13 @@ allowed_extensions = {".pdf", ".docx"}
 converter = None
 model = None
 
+
 class JobDescriptionClass(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     raw_text: str
     parsed: dict
     weights: dict
+
 
 def add_resume_index(entries: list[ResumeIndex]):
     with SessionLocal() as session:
@@ -48,10 +52,12 @@ def add_resume_index(entries: list[ResumeIndex]):
             session.add(entry)
         session.commit()
 
+
 def find_resume_index(filename: str):
     with SessionLocal() as session:
         entry = session.get(ResumeIndex, filename)
         return entry
+
 
 def remove_resume_index(entries: list[ResumeIndex]):
     filenames = [entry.filename for entry in entries]
@@ -61,6 +67,7 @@ def remove_resume_index(entries: list[ResumeIndex]):
             if entry:
                 session.delete(entry)
 
+
 def clear_buffer():
     for item in buffer_dir.iterdir():
         if item.is_dir():
@@ -68,10 +75,12 @@ def clear_buffer():
         else:
             item.unlink()
 
-def get_jd(sno:int):
+
+def get_jd(sno: int):
     with SessionLocal() as session:
         jd = session.get(JobDescriptions, sno)
         return jd
+
 
 def insert_jds(entries: list[JobDescriptions]):
     with SessionLocal() as session:
@@ -79,9 +88,11 @@ def insert_jds(entries: list[JobDescriptions]):
             session.add(entry)
         session.commit()
 
+
 def jd_exists(sno: int) -> bool:
     with SessionLocal() as session:
         return session.get(JobDescriptions, sno) is not None
+
 
 def update_jd(sno: int, updated_data: JobDescriptions):
     if not jd_exists(sno):
@@ -102,6 +113,7 @@ def update_jd(sno: int, updated_data: JobDescriptions):
         session.refresh(jd)
         return True
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global converter, model
@@ -112,31 +124,29 @@ async def lifespan(app: FastAPI):
     os.makedirs("uploaded/in_queue", exist_ok=True)
     os.makedirs("uploaded/buffer", exist_ok=True)
     Base.metadata.create_all(bind=engine)
-    
+
     if not os.path.isfile("skills_category.json"):
         with open("skills_category.json", "w", encoding="utf-8") as f:
-            json.dump(dict(), f, indent=4)
+            json.dump({}, f, indent=4)
 
     if not os.path.isfile("skills.json"):
         with open("skills.json", "w", encoding="utf-8") as f:
             json.dump([], f, indent=4)
-    
+
     print("Downloading models")
     download_models()
-    model = GLiNER.from_pretrained(
-        "philterd/ph-eye-pii-en-xsmall"
-    )
+    model = GLiNER.from_pretrained("philterd/ph-eye-pii-en-xsmall")
     load_embedder()
     print("Done downloading models")
-    
+
     print("Initializing docling")
     converter = DocumentConverter()
     converter.initialize_pipeline(InputFormat.PDF)
     converter.initialize_pipeline(InputFormat.DOCX)
     print("Done initializing docling")
-    
+
     yield
-    
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -148,109 +158,118 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.post("/add_skill")
 def add_skill(keyword: str, skill_name: str) -> str:
     skills = []
-    skills_category = dict()
+    skills_category = {}
     with open("skills.json", "r", encoding="utf-8") as file:
         skills = json.load(file)
     with open("skills_category.json", "r", encoding="utf-8") as file:
         skills_category = json.load(file)
-    
+
     skills_category, skills = remove_redundant_values(skills_category, skills)
-    
+
     if keyword in skills:
         return "Skill keyword already exists. Move if you want it in other skill name."
-    
+
     skills_category_values = [
-        skill1
-        for skills1 in skills_category.values()
-        for skill1 in skills1
+        skill1 for skills1 in skills_category.values() for skill1 in skills1
     ]
-    
-    skills, skills_category_values, skills_category = repair_skill(skills, skills_category_values, skills_category)
+
+    skills, skills_category_values, skills_category = repair_skill(
+        skills, skills_category_values, skills_category
+    )
 
     if keyword in skills_category_values:
         with open("skills.json", "w", encoding="utf-8") as file:
             json.dump(skills, file, indent=4)
-        return f"Keyword is already under skill name."
+        return "Keyword is already under skill name."
 
     if skill_name not in skills_category:
         skills_category[skill_name] = []
     skills_category[skill_name].append(keyword)
     skills.append(keyword)
-    
+
     with open("skills_category.json", "w", encoding="utf-8") as file:
         json.dump(skills_category, file, indent=4)
     with open("skills.json", "w", encoding="utf-8") as file:
         json.dump(skills, file, indent=4)
-    
+
     return "Success"
+
 
 @app.post("/remove_skill")
 def remove_skill(keyword: str, skill_name: str) -> str:
     skills = []
-    skills_category = dict()
+    skills_category = {}
     found = True
     with open("skills.json", "r", encoding="utf-8") as file:
         skills = json.load(file)
     with open("skills_category.json", "r", encoding="utf-8") as file:
         skills_category = json.load(file)
-    
+
     skills_category, skills = remove_redundant_values(skills_category, skills)
-    
+
     skills_category_values = [
-        skill1
-        for skills1 in skills_category.values()
-        for skill1 in skills1
+        skill1 for skills1 in skills_category.values() for skill1 in skills1
     ]
-    
-    skills, skills_category_values, skills_category = repair_skill(skills, skills_category_values, skills_category)
-    
-    if keyword not in skills or skill_name not in skills_category or keyword not in skills_category[skill_name]:
+
+    skills, skills_category_values, skills_category = repair_skill(
+        skills, skills_category_values, skills_category
+    )
+
+    if (
+        keyword not in skills
+        or skill_name not in skills_category
+        or keyword not in skills_category[skill_name]
+    ):
         found = False
     else:
         skills.remove(keyword)
         skills_category[skill_name].remove(keyword)
-        if not(skills_category[skill_name]):
+        if not (skills_category[skill_name]):
             del skills_category[skill_name]
-    
+
     with open("skills_category.json", "w", encoding="utf-8") as file:
         json.dump(skills_category, file, indent=4)
     with open("skills.json", "w", encoding="utf-8") as file:
         json.dump(skills, file, indent=4)
-    
+
     if found:
         return "Success"
     else:
         return "Not found. Must match key and value pair."
-    
+
+
 @app.get("/get_skills")
 def read_skill():
     skills = []
-    skills_category = dict()
+    skills_category = {}
     with open("skills.json", "r", encoding="utf-8") as file:
         skills = json.load(file)
     with open("skills_category.json", "r", encoding="utf-8") as file:
         skills_category = json.load(file)
-    
+
     skills_category, skills = remove_redundant_values(skills_category, skills)
-    
+
     skills_category_values = [
-        skill1
-        for skills1 in skills_category.values()
-        for skill1 in skills1
+        skill1 for skills1 in skills_category.values() for skill1 in skills1
     ]
-    
-    skills, skills_category_values, skills_category = repair_skill(skills, skills_category_values, skills_category)
-    
+
+    skills, skills_category_values, skills_category = repair_skill(
+        skills, skills_category_values, skills_category
+    )
+
     return skills_category
 
 
-def repair_skill(skills: list[str], skills_category_values: list[str], skills_category: dict):
+def repair_skill(
+    skills: list[str], skills_category_values: list[str], skills_category: dict
+):
     category_missing = False
     keyword_missing = False
-    
+
     for skill in skills:
         if skill not in skills_category_values:
             if skill not in skills_category:
@@ -258,21 +277,22 @@ def repair_skill(skills: list[str], skills_category_values: list[str], skills_ca
             skills_category[skill].append(skill)
             skills_category_values.append(skill)
             category_missing = True
-    
+
     if category_missing:
         with open("skills_category.json", "w", encoding="utf-8") as file:
             json.dump(skills_category, file, indent=4)
-    
+
     for skill in skills_category_values:
         if skill not in skills:
             skills.append(skill)
             keyword_missing = True
-    
+
     if keyword_missing:
         with open("skills.json", "w", encoding="utf-8") as file:
             json.dump(skills, file, indent=4)
-    
+
     return skills, skills_category_values, skills_category
+
 
 def remove_redundant_values(dictionary: dict, list1: list):
     counts = Counter(
@@ -281,23 +301,23 @@ def remove_redundant_values(dictionary: dict, list1: list):
         for item in (v if isinstance(v, list) else [v])
     )
     result = {
-        k: [item for item in v if counts[item] == 1]
-        for k, v in dictionary.items()
+        k: [item for item in v if counts[item] == 1] for k, v in dictionary.items()
     }
     result = {k: v for k, v in result.items() if v}
-    
+
     if result != dictionary:
         with open("skills_category.json", "w", encoding="utf-8") as file:
             json.dump(result, file, indent=4)
-    
+
     duplicates = {val for val, count in counts.items() if count > 1}
     cleaned_list1 = [item for item in dict.fromkeys(list1) if item not in duplicates]
-    
+
     if cleaned_list1 != list1:
         with open("skills.json", "w", encoding="utf-8") as file:
             json.dump(cleaned_list1, file, indent=4)
-    
+
     return result, cleaned_list1
+
 
 @app.post("/upload_resumes")
 async def upload_files(files: list[UploadFile] = File(...)):
@@ -312,8 +332,7 @@ async def upload_files(files: list[UploadFile] = File(...)):
         extension = extension.lower()
         if extension not in allowed_extensions:
             raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file: {file.filename}"
+                status_code=400, detail=f"Unsupported file: {file.filename}"
             )
         saved_filename = f"{time_str}_{i}_{filename}"
         file_path = buffer_dir / saved_filename
@@ -324,13 +343,13 @@ async def upload_files(files: list[UploadFile] = File(...)):
             ResumeIndex(
                 filename=saved_filename,
                 status=ResumeStatus.IN_QUEUE,
-                upload_time = time,
-                file_type=extension
+                upload_time=time,
+                file_type=extension,
             )
         )
-    
+
     add_resume_index(resumes)
-    
+
     for item in buffer_dir.iterdir():
         if item.is_file():
             shutil.move(item, in_queue_dir / item.name)
@@ -339,11 +358,13 @@ async def upload_files(files: list[UploadFile] = File(...)):
         "message": "Files uploaded successfully",
     }
 
-def fallback_for_pdf(location:str)->str:
+
+def fallback_for_pdf(location: str) -> str:
     with pymupdf.open(location) as doc:
         return "\n".join(page.get_text("text", sort=True) for page in doc)
 
-def fallback_for_docx(location:str)->str:
+
+def fallback_for_docx(location: str) -> str:
     doc = Document(location)
     parts = [p.text for p in doc.paragraphs]
     for table in doc.tables:
@@ -356,130 +377,125 @@ def fallback_for_docx(location:str)->str:
             parts.append(" | ".join(cells))
     return "\n".join(parts)
 
+
 @app.get("/get_jd")
 def get_jd_api(sno: int):
     jd = get_jd(sno)
-    jd= {
-        column.name: getattr(jd, column.name)
-        for column in jd.__table__.columns
-    }
+    jd = {column.name: getattr(jd, column.name) for column in jd.__table__.columns}
     return jd
 
+
 @app.post("/create_jds")
-def create_jds(in_jds:list[JobDescriptionClass]):
+def create_jds(in_jds: list[JobDescriptionClass]):
     out_jds = []
     required = ["must_have", "nice_to_have", "experience_years", "requirements"]
-    
+
     for in_jd in in_jds:
         if in_jd:
             not_found_parsed = [key for key in required if key not in in_jd.parsed]
             if not_found_parsed:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"{not_found_parsed} Key(s) missing in parsed"
+                    detail=f"{not_found_parsed} Key(s) missing in parsed",
                 )
-            
+
             not_found_weight = [key for key in required if key not in in_jd.weights]
             if not_found_weight:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"{not_found_weight} Key(s) missing in weights"
+                    detail=f"{not_found_weight} Key(s) missing in weights",
                 )
 
             for skill in in_jd.parsed["must_have"]:
                 if skill in in_jd.parsed["nice_to_have"]:
                     raise HTTPException(
                         status_code=404,
-                        detail="Error! Duplicate skill(s) found in both must_have and nice_to_have"
+                        detail="Error! Duplicate skill(s) found in both must_have and nice_to_have",
                     )
 
-            in_jd.parsed["must_have"] = [skill.lower() for skill in in_jd.parsed["must_have"]]
-            in_jd.parsed["nice_to_have"] = [skill.lower() for skill in in_jd.parsed["nice_to_have"]]
-            
+            in_jd.parsed["must_have"] = [
+                skill.lower() for skill in in_jd.parsed["must_have"]
+            ]
+            in_jd.parsed["nice_to_have"] = [
+                skill.lower() for skill in in_jd.parsed["nice_to_have"]
+            ]
+
             out_jd = JobDescriptions(
-                title = in_jd.title,
-                raw_text = in_jd.raw_text,
-                parsed = in_jd.parsed,
-                weights = in_jd.weights
+                title=in_jd.title,
+                raw_text=in_jd.raw_text,
+                parsed=in_jd.parsed,
+                weights=in_jd.weights,
             )
             out_jds.append(out_jd)
         else:
             raise HTTPException(
-                status_code=404,
-                detail="Error! Empty Job Description(s)"
+                status_code=404, detail="Error! Empty Job Description(s)"
             )
-    
+
     insert_jds(out_jds)
     return {"message": "Successfully added Job Descriptions"}
 
+
 @app.post("/edit_jd")
-def edit_jd(sno: int, new_jd:JobDescriptionClass):
-    if not(jd_exists(sno)):
+def edit_jd(sno: int, new_jd: JobDescriptionClass):
+    if not (jd_exists(sno)):
         raise HTTPException(
             status_code=404,
-            detail=f"Job Description with Serial Number: {sno} does not exist"
+            detail=f"Job Description with Serial Number: {sno} does not exist",
         )
-    parsed_jds = []
     required = ["must_have", "nice_to_have", "experience_years", "requirements"]
-    
+
     if new_jd:
         not_found_parsed = [key for key in required if key not in new_jd.parsed]
         if not_found_parsed:
             raise HTTPException(
-                status_code=404,
-                detail=f"{not_found_parsed} Key(s) missing in parsed"
+                status_code=404, detail=f"{not_found_parsed} Key(s) missing in parsed"
             )
-        
+
         not_found_weight = [key for key in required if key not in new_jd.weights]
         if not_found_weight:
             raise HTTPException(
-                status_code=404,
-                detail=f"{not_found_weight} Key(s) missing in weights"
+                status_code=404, detail=f"{not_found_weight} Key(s) missing in weights"
             )
 
         for skill in new_jd.parsed["must_have"]:
             if skill in new_jd.parsed["nice_to_have"]:
                 raise HTTPException(
                     status_code=404,
-                    detail="Error! Duplicate skill(s) found in both must_have and nice_to_have"
+                    detail="Error! Duplicate skill(s) found in both must_have and nice_to_have",
                 )
 
-        new_jd.parsed["must_have"] = [skill.lower() for skill in new_jd.parsed["must_have"]]
-        new_jd.parsed["nice_to_have"] = [skill.lower() for skill in new_jd.parsed["nice_to_have"]]
-        
+        new_jd.parsed["must_have"] = [
+            skill.lower() for skill in new_jd.parsed["must_have"]
+        ]
+        new_jd.parsed["nice_to_have"] = [
+            skill.lower() for skill in new_jd.parsed["nice_to_have"]
+        ]
+
         parsed_jd = JobDescriptions(
-            title = new_jd.title,
-            raw_text = new_jd.raw_text,
-            parsed = new_jd.parsed,
-            weights = new_jd.weights
+            title=new_jd.title,
+            raw_text=new_jd.raw_text,
+            parsed=new_jd.parsed,
+            weights=new_jd.weights,
         )
     else:
-        raise HTTPException(
-            status_code=404,
-            detail="Error! Empty Job Description(s)"
-        )
-    
+        raise HTTPException(status_code=404, detail="Error! Empty Job Description(s)")
+
     update_jd(sno, parsed_jd)
     return {"message": "Successfully added Job Descriptions"}
-    
+
+
 def find_name(
-    text: str,
-    threshold: float = 0.50,
-    chunk_size: int = 1200,
-    overlap: int = 150
+    text: str, threshold: float = 0.50, chunk_size: int = 1200, overlap: int = 150
 ):
     current_offset = 0
-    
+
     for line in text[:3000].splitlines(keepends=True):
         if not line.strip():
             current_offset += len(line)
             continue
 
-        entities = model.predict_entities(
-            line,
-            ["name"],
-            threshold=threshold
-        )
+        entities = model.predict_entities(line, ["name"], threshold=threshold)
 
         for entity in entities:
             start = current_offset + entity["start"]
@@ -498,13 +514,30 @@ def find_name(
 
 
 def extract_experience(text: str):
-    MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
-    _MON = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|"
-            r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)")
-    _DATE = rf"(?:\b{_MON}\.?\s+(?:19|20)\d{{2}}\b|\b(?:19|20)\d{{2}}\b)"   # "Mar 2020" or "2020"
+    MONTHS = [
+        "jan",
+        "feb",
+        "mar",
+        "apr",
+        "may",
+        "jun",
+        "jul",
+        "aug",
+        "sep",
+        "oct",
+        "nov",
+        "dec",
+    ]
+    _MON = (
+        r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|"
+        r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+    )
+    _DATE = rf"(?:\b{_MON}\.?\s+(?:19|20)\d{{2}}\b|\b(?:19|20)\d{{2}}\b)"  # "Mar 2020" or "2020"
     _OPEN = r"(?:present|current|now|ongoing)"
-    RANGE = re.compile(rf"({_DATE})\s*(?:-|–|—|\bto\b)\s*({_DATE}|{_OPEN})", re.I)
-    
+    RANGE = re.compile(
+        rf"({_DATE})\s*(?:-|–|—|\bto\b)\s*({_DATE}|{_OPEN})", re.IGNORECASE
+    )
+
     def _to_month(s: str) -> int:
         today = datetime.now()
         s = s.lower()
@@ -513,7 +546,7 @@ def extract_experience(text: str):
         year = int(re.search(r"(?:19|20)\d{2}", s).group())
         month = MONTHS.index(s[:3]) + 1 if s[:3] in MONTHS else 6
         return year * 12 + month
-    
+
     def total_years(text: str) -> float:
         today = datetime.now()
         now = today.year * 12 + today.month
@@ -532,9 +565,9 @@ def extract_experience(text: str):
                 merged.append([s, e])
 
         return round(sum(e - s + 1 for s, e in merged) / 12, 1)
-    
+
     exp_text = get_exp_section(text)
-    
+
     if exp_text is None:
         return {"years": None, "confidence": "low"}
     years = total_years(exp_text)
@@ -542,119 +575,138 @@ def extract_experience(text: str):
         return {"years": None, "confidence": "low"}
     return {"years": years, "confidence": "high"}
 
+
 def process_text(text: str):
-    details = dict()
+    details = {}
     skills = []
     original_text = text
     text = text.lower()
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
-    phone_pattern = r'(?:(?:\+|00)\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]?\d{3,5}[\s.-]?\d{3,5}'
-    
+    email_pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+    phone_pattern = r"(?:(?:\+|00)\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]?\d{3,5}[\s.-]?\d{3,5}"
+
     emails = re.findall(email_pattern, text)
     phones = re.findall(phone_pattern, text)
-    
+
     details["email"] = emails[0] if emails else None
     details["phone"] = phones[0].strip() if phones else None
-    
+
     details["name"] = find_name(original_text)
     if details["name"]:
         details["name"] = details["name"].title()
     details["skills"] = []
-    
+
     with open("skills.json", "r", encoding="utf-8") as file:
         skills = json.load(file)
-    
-    if not(skills):
+
+    if not (skills):
         raise Exception("Add skills in skills.json")
-    
+
     SKILL_RE = re.compile(
         r"(?<![\w+#])("
-        + "|".join(
-            map(re.escape, sorted(skills, key=len, reverse=True))
-        )
+        + "|".join(map(re.escape, sorted(skills, key=len, reverse=True)))
         + r")(?![\w+#])",
-        re.IGNORECASE
+        re.IGNORECASE,
     )
-    details["skills"] = list(set([skill.lower() for skill in SKILL_RE.findall(text)]))
-    
-    
+    details["skills"] = list({skill.lower() for skill in SKILL_RE.findall(text)})
+
     exp = extract_experience(text)
-    
+
     details["experience_years"] = exp["years"]
     details["experience_confidence"] = exp["confidence"]
-    
-    text_sections = "\n".join(filter(None, [get_section(original_text, EXP_START), get_section(original_text, PROJ_START)]))
+
+    text_sections = "\n".join(
+        filter(
+            None,
+            [
+                get_section(original_text, EXP_START),
+                get_section(original_text, PROJ_START),
+            ],
+        )
+    )
     chunks = to_chunks(text_sections or original_text)
-    
+
     return details, chunks
 
-def extract_details(location:str):
+
+def extract_details(location: str):
     extension = "." + location.split(".")[-1] if "." in location else ""
     extension = extension.lower()
     if extension not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file: {location}"
-        )
+        raise HTTPException(status_code=400, detail=f"Unsupported file: {location}")
     try:
         result = converter.convert(location)
         text = result.document.export_to_markdown()
-        text = re.sub(r"^#+\s*", "", text, flags=re.M)
+        text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
         text = text.replace("**", "")
 
         message = "Success"
     except Exception as e:
         text = None
-        if extension==".pdf":
+        if extension == ".pdf":
             text = fallback_for_pdf(location)
-        elif extension==".docx":
+        elif extension == ".docx":
             text = fallback_for_docx(location)
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Either No fallback found or Unsupported file for: {location}"
+                detail=f"Either No fallback found or Unsupported file for: {location}",
             )
-            
-        message = f"Success with fallback for error: {e}. Multi-column may read out of order."
-        
-    details, chunks = process_text(text)
-    return {"message" : message,
-            "payload" : details,
-            "chunks" : chunks}
 
-def score_candidate(keyword2skill: dict, jd: dict, person_detail: dict, check_exp:bool, total: float, sem: tuple = (None, dict())):
+        message = (
+            f"Success with fallback for error: {e}. Multi-column may read out of order."
+        )
+
+    details, chunks = process_text(text)
+    return {"message": message, "payload": details, "chunks": chunks}
+
+
+def score_candidate(
+    keyword2skill: dict,
+    jd: dict,
+    person_detail: dict,
+    check_exp: bool,
+    total: float,
+    sem: tuple = (None, {}),
+):
     base_score = 0
     skills = []
     keywords = set(person_detail["payload"]["skills"])
-    
+
     for keyword in keywords:
         matched_skill = keyword2skill.get(keyword.lower())
         if matched_skill:
             skills.append(matched_skill.lower())
     skills = set(skills)
-    
+
     match_detail = {
         "matched_must": sorted(jd["parsed"]["must_have"] & skills),
         "missing_must": sorted(jd["parsed"]["must_have"] - skills),
         "matched_nice": sorted(jd["parsed"]["nice_to_have"] & skills),
-        "missing_nice": sorted(jd["parsed"]["nice_to_have"] - skills)
+        "missing_nice": sorted(jd["parsed"]["nice_to_have"] - skills),
     }
-    
-    base_score += len(match_detail["matched_must"])*jd["weights"]["must_have"]
-    base_score += len(match_detail["matched_nice"])*jd["weights"]["nice_to_have"]
-    
+
+    base_score += len(match_detail["matched_must"]) * jd["weights"]["must_have"]
+    base_score += len(match_detail["matched_nice"]) * jd["weights"]["nice_to_have"]
+
     if check_exp and person_detail["payload"]["experience_years"]:
-        base_score += min(person_detail["payload"]["experience_years"] * jd["weights"]["experience_years"] / jd["parsed"]["experience_years"], jd["weights"]["experience_years"])
-    
+        base_score += min(
+            person_detail["payload"]["experience_years"]
+            * jd["weights"]["experience_years"]
+            / jd["parsed"]["experience_years"],
+            jd["weights"]["experience_years"],
+        )
+
     base_match_percentage = base_score * 100 / total
     match_detail["base_percentage"] = base_match_percentage
-    
+
     if sem[0] is not None:
         total_score = base_score + sem[0] * jd["weights"]["requirements"]
         sem_match_percentage = sem[0] * 100
-        
-        total_match_percentage = total_score * 100 / (total + jd["weights"]["requirements"])
-        
+
+        total_match_percentage = (
+            total_score * 100 / (total + jd["weights"]["requirements"])
+        )
+
         match_detail["semantic_percentage"] = sem_match_percentage
         match_detail["semantic_evidence"] = sem[1]
         match_detail["total_percentage"] = total_match_percentage
@@ -663,69 +715,86 @@ def score_candidate(keyword2skill: dict, jd: dict, person_detail: dict, check_ex
         match_detail["total_percentage"] = base_match_percentage
         match_detail["semantic_percentage"] = None
         match_detail["semantic_evidence"] = None
-        
+
     return match_detail
 
+
 @app.post("/match")
-def match(locations:list[str], jd_sno: int, threshold: int = Query(0, ge=0, le=100)):
+def match(locations: list[str], jd_sno: int, threshold: int = Query(0, ge=0, le=100)):
     skills_category = None
-    
+
     with open("skills_category.json", "r", encoding="utf-8") as file:
         skills_category = json.load(file)
-    
-    keyword2skill = dict()
+
+    keyword2skill = {}
     for k, vals in skills_category.items():
         for v in vals:
             if v.lower() in keyword2skill:
-                raise HTTPException(status_code=404, 
-                detail = f"Duplicate keyword found: {v.lower()} under more than one skill name. Skills are case-insensitive")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Duplicate keyword found: {v.lower()} under more than one skill name. Skills are case-insensitive",
+                )
             keyword2skill[v.lower()] = k
 
-    
     jd = get_jd(jd_sno)
     check_exp = False
     matched = []
-    
+
     if jd is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Job description not found"
-        )
-    
-    jd= {
-            column.name: getattr(jd, column.name)
-            for column in jd.__table__.columns
-        }
-    
+        raise HTTPException(status_code=404, detail="Job description not found")
+
+    jd = {column.name: getattr(jd, column.name) for column in jd.__table__.columns}
+
     jd["parsed"]["must_have"] = set(jd["parsed"]["must_have"])
     jd["parsed"]["nice_to_have"] = set(jd["parsed"]["nice_to_have"])
-    
-    total = len(jd["parsed"]["must_have"]) * jd["weights"]["must_have"] + len(jd["parsed"]["nice_to_have"]) * jd["weights"]["nice_to_have"]
-    
-    if jd["parsed"]["experience_years"] is not None and jd["parsed"]["experience_years"] > 0:
+
+    total = (
+        len(jd["parsed"]["must_have"]) * jd["weights"]["must_have"]
+        + len(jd["parsed"]["nice_to_have"]) * jd["weights"]["nice_to_have"]
+    )
+
+    if (
+        jd["parsed"]["experience_years"] is not None
+        and jd["parsed"]["experience_years"] > 0
+    ):
         total += jd["weights"]["experience_years"]
         check_exp = True
-    
+
     if total == 0:
         raise HTTPException(status_code=400, detail="Job Description cannot be empty")
-    
-    requirements = jd["parsed"].get("requirements") or bullet_requirements(jd["raw_text"])
+
+    requirements = jd["parsed"].get("requirements") or bullet_requirements(
+        jd["raw_text"]
+    )
     req_vecs = embed(requirements) if requirements else None
-    results, failed = [], []
-    
+    failed = []
+
     for location in locations:
         try:
             person = extract_details(location)
             if person["message"] != "Success":
-                logging.error(f"For location {location}, got an error: " + person["message"])
+                logger.error(
+                    "For location %s, got an error: %s",
+                    location,
+                    person["message"],
+                )
         except Exception as e:
             failed.append({"resume_location": location, "error": str(e)})
             continue
-        
+
         sem = semantic_fit(requirements, req_vecs, person["chunks"])
         match_detail = score_candidate(keyword2skill, jd, person, check_exp, total, sem)
-        
+
         if match_detail["total_percentage"] >= threshold:
-            matched.append({"candidate_details":person["payload"], "job_description_serial_number": jd["sno"], "job_description_title": jd["title"], "resume_location": location, "percentage_match": match_detail["total_percentage"], "match_detail": match_detail})
+            matched.append(
+                {
+                    "candidate_details": person["payload"],
+                    "job_description_serial_number": jd["sno"],
+                    "job_description_title": jd["title"],
+                    "resume_location": location,
+                    "percentage_match": match_detail["total_percentage"],
+                    "match_detail": match_detail,
+                }
+            )
     matched.sort(key=lambda x: x["percentage_match"], reverse=True)
     return {"matched": matched, "failed": failed}

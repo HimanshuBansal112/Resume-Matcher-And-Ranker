@@ -1,16 +1,47 @@
 import re
 
-EXP_START = {"experience", "work experience", "professional experience", "relevant experience",
-             "employment", "employment history", "work history", "internship", "internships"}
-PROJ_START = {"projects", "project", "academic projects", "personal projects", "key projects"}
-STOP = {"education", "academic", "skills", "technical skills", "certifications", "achievements",
-        "awards", "languages", "interests", "hobbies", "references", "summary", "objective", "profile"}
+EXP_START = {
+    "experience",
+    "work experience",
+    "professional experience",
+    "relevant experience",
+    "employment",
+    "employment history",
+    "work history",
+    "internship",
+    "internships",
+}
+PROJ_START = {
+    "projects",
+    "project",
+    "academic projects",
+    "personal projects",
+    "key projects",
+}
+STOP = {
+    "education",
+    "academic",
+    "skills",
+    "technical skills",
+    "certifications",
+    "achievements",
+    "awards",
+    "languages",
+    "interests",
+    "hobbies",
+    "references",
+    "summary",
+    "objective",
+    "profile",
+}
 
 ALL_HEADINGS = EXP_START | PROJ_START | STOP
 
+
 def _norm(line: str) -> str:
     return re.sub(r"[^a-z]+", " ", line.lower()).strip()
-        
+
+
 def get_section(text: str, starts: set[str]) -> str | None:
     out, inside = [], False
     for line in text.splitlines():
